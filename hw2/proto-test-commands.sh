@@ -1,0 +1,6 @@
+python src/protonet.py --num_way 5 --num_support 1 --num_query 10 --log_dir "logs/protonet/omniglot.way:5.support:1.query:15.lr:0.001.batch_size:16" --checkpoint_step 1300 --test
+python src/protonet.py --num_way 5 --num_support 2 --num_query 10 --log_dir "logs/protonet/omniglot.way:5.support:1.query:15.lr:0.001.batch_size:16" --checkpoint_step 1300 --test
+python src/protonet.py --num_way 5 --num_support 4 --num_query 10 --log_dir "logs/protonet/omniglot.way:5.support:1.query:15.lr:0.001.batch_size:16" --checkpoint_step 1300 --test
+python src/protonet.py --num_way 5 --num_support 6 --num_query 10 --log_dir "logs/protonet/omniglot.way:5.support:1.query:15.lr:0.001.batch_size:16" --checkpoint_step 1300 --test
+python src/protonet.py --num_way 5 --num_support 8 --num_query 10 --log_dir "logs/protonet/omniglot.way:5.support:1.query:15.lr:0.001.batch_size:16" --checkpoint_step 1300 --test
+python src/protonet.py --num_way 5 --num_support 10 --num_query 10 --log_dir "logs/protonet/omniglot.way:5.support:1.query:15.lr:0.001.batch_size:16" --checkpoint_step 1300 --test

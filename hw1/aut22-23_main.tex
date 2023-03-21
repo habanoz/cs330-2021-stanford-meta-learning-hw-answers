@@ -1,0 +1,229 @@
+\documentclass[12pt]{article}
+% \usepackage{fullpage}
+% \usepackage{enumitem}
+\usepackage{amsmath,amssymb,graphicx,url,hyperref}
+% \usepackage{sectsty}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+}
+
+\sectionfont{\fontsize{15}{20}\selectfont}
+
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\E}{\mathbb{E}}
+% \usepackage{tgpagella}
+
+\begin{document}
+
+\begin{center}
+{\Large \textbf{CS330 Autumn 2022 Homework 1 \\ Data Processing and Black-Box Meta-Learning}}
+\\ {\large Due Wednesday October 12, 11:59 PM PST}
+
+\begin{tabular}{rl}
+SUNet ID: &  \\
+Name: & \\
+Collaborators: & 
+\end{tabular}
+\end{center}
+
+By turning in this assignment, I agree by the Stanford honor code and declare
+that all of this is my own work.
+
+\section*{Overview}
+
+\textbf{Goals:} In this assignment, we will look at meta-learning for few shot classification. You will:
+\begin{enumerate}
+    \item Learn how to process and partition data for meta learning problems, where training is done over a distribution of training tasks $p(\mathcal{T})$.
+    \item Implement and train memory augmented neural networks, a black-box meta-learner that uses a recurrent neural network \cite{pmlr-v48-santoro16}.
+    \item Analyze the learning performance for different size problems.
+    \item Experiment with model parameters and explore how they improve performance.
+\end{enumerate}
+
+We have provided you with the starter code, which can be downloaded from the course website. We will be working with Omniglot~\cite{Lake1332}, a dataset with 1623 characters from 50 different languages. Each character has 20 28x28 images.
+We are interested in training models for $K$-shot, $N$-way classification, i.e. training a classifier to distinguish between $N$ previously unseen characters, given only $K$ labeled examples of each character.
+
+\vspace{0.2cm}
+\noindent\textbf{Submission}: To submit your homework, submit one PDF report to Gradescope containing written answers and Tensorboard graphs (screenshots are fine) to the questions below, as well as the \texttt{hw1.py} and \texttt{load\_data.py} scripts in a single zip file. The PDF should also include your name and any students you talked to or collaborated with. \textbf{Any written responses or plots to the questions below must appear in your PDF submission.} 
+
+
+
+\section*{Problem 1: Data Processing for Few-Shot Classification}
+
+Before training any models, you must write code to sample batches for training. Fill in the \texttt{\_sample} function in the \texttt{DataGenerator} class. The class already has variables defined for batch size \texttt{batch\_size} ($B$), number of classes \texttt{num\_classes} ($N$), and number of samples per class \texttt{num\_samples\_per\_class} ($K+1$). Your code should:
+\begin{enumerate}
+    \item Sample $N$ different characters from either the specified train, test, or validation folder.
+    \item Load $K+1$ images per character and collect the associated labels, using $K$ images per class for the support set and 1 image per class for the query set.
+    \item Format the data and return two tensors, one of flattened images with shape [$K+1, N, 784$] and one of one-hot labels [$K+1, N, N$].
+\end{enumerate}  
+
+\begin{figure}
+    \centering
+    \includegraphics[width = 0.75\textwidth]{figures/hw1_batch_v4.png}
+    \vspace{-0.3cm}
+    \caption{\small Example data batch from the Data Generator. The first $K$ sets of images form the support set and are passed in the \emph{same order}. The final set of images forms the query set and must be shuffled.}
+    \label{fig:batch}
+\end{figure}
+Note that your code only needs to return one single (image, label) tuple. We batch the inputs using an instance of torch.utils.data.DataLoader, and the final shape input images is [$B, K+1, N, 784$], and that of the input labels is [$B, K+1, N, N$], where B is the batch size.
+
+Figure \ref{fig:batch} illustrates the data organization. In this example, we have: (1) images from $N=3$ different classes; (2) we are provided $K=2$ sets of labeled images in the support set and (3) our batch consists of only two tasks, i.e. $B=2$. 
+\begin{enumerate}
+    \item We will sample both the support and query sets as a single batch, hence one batch element should obtain image and label tensors of shapes $[K+1, N, 784]$  and $[K+1, N, N]$ respectively. In the example of Fig. \ref{fig:batch}, \texttt{images[0, 1, 1]} would be the image of the letter "C" in the support set with corresponding class label $[0, 1, 0]$ and \texttt{images[0, 2, 2]} would be the the letter "C" in the query set (with the same label).
+
+    \item We must shuffle the order of examples in the \textbf{query set}, as otherwise the network can learn to output the same sequence of classes and achieve 100\% accuracy, without actually learning to recognize the images. If you get 100\% accuracy, you likely did not shuffle the query data correctly. In principle, you should be able to shuffle the order of data in the support set as well; however, this makes the model optimization much harder. \textbf{You should feed the support set examples in the same, fixed order}. In the example above, the support set examples are always in the same order.
+
+\end{enumerate}
+
+\noindent We provide helper functions to (1) take a list of folders and provide paths to image files/labels, and (2) to take an image file path and return a flattened numpy matrix. The functions \texttt{np.random.shuffle} and \texttt{np.eye} will also be helpful. \textbf{Be careful about output shapes and data types!}
+
+
+
+
+\section*{Problem 2: Memory Augmented Neural Networks (MANN)     \cite{pmlr-v48-santoro16,DBLP:journals/corr/MishraRCA17}}
+
+We will now be implementing few-shot classification using memory augmented neural networks (MANNs). The main idea of MANN is that the network should learn how to encode the first $K$ examples of each class into memory such that it can be used to accurately classify the $K+1$th example. See Figure~\ref{mann} for a graphical representation of this process.
+
+Data processing will be done as in SNAIL~\cite{DBLP:journals/corr/MishraRCA17}. Each set of labels and images are concatenated together, and the $N*K$ support set examples are sequentially passed through the network as shown in Fig. \ref{mann}. Then the query example of each class is fed through the network, \textbf{concatenated with 0 instead of the true label}. The loss is computed between the query set predictions and the ground truth labels, which is then backpropagated through the network. \textbf{Note}: The loss is \textit{only} computed on the set of $N$ query images, which comprise of the last examples from each character class. 
+
+\begin{figure}
+\centering
+\includegraphics[width=\linewidth]{figures/hw1seq.png}
+\vspace{-9mm}
+\caption{Feed $K$ labeled examples of each of $N$ classes through the memory-augmented network. Then feed final set of $N$ examples and optimize to minimize loss.}
+\label{mann}
+\end{figure}
+
+
+
+\noindent In the \texttt{hw1.py} file:
+\begin{enumerate}
+    \item Fill in the \texttt{call} function of the \texttt{MANN} class to take in image tensor of shape [$B, K+1, N, 784$] and a label tensor of shape [$B, K+1, N, N$] and output labels of shape [$B,K+1,N, N$]. The layers to use have already been defined for you in the \texttt{\_\_init\_\_} function. \textit{Hint: Remember to pass zeros, not the ground truth labels for the final $N$ examples.}
+    \item  Fill in the function called \texttt{loss\_function} in the \texttt{MANN} class which takes as input the [$B,K+1,N, N$] labels and [$B,K+1,N, N$] predicted labels and computes \href{https://pytorch.org/docs/stable/generated/torch.nn.functional.cross_entropy.html#torch.nn.functional.cross_entropy}{the cross entropy loss} only on the $N$ test images. 
+\end{enumerate}
+\textbf{Note}: Both of the above functions will need to be backpropogated through, so they need to be written in PyTorch in a differentiable way.
+
+\section*{Problem 3: Analysis}
+
+Once you have completed problems 1 and 2, you can train your few shot classification model. You should observe both the support and query losses go down, and the query accuracy go up. Now we will examine how the performance varies for different size problems.
+Train models for the following values of $K$ and $N$:
+\begin{itemize}
+    \item $K = 1$, $N=2$ %, you should be able to achieve about 90\% accuracy.
+    \item $K = 2$, $N=2$ %, you should be able to achieve about 80\% accuracy.
+    \item $K = 1$, $N=3$ %, you should be able to achieve about 75-80\% accuracy.
+    \item $K = 1$, $N=4$ %, you should be able to achieve about 70\% accuracy.
+\end{itemize}
+% $K: [1, 5, 10]$
+% $N: [5, 20, 50]$
+
+Example code:
+
+\textcolor{green}{\texttt{python hw1.py --num\_shot K --num\_classes N}}
+
+For checking training results and/or taking a screenshot for the writeup, use:
+
+\textcolor{green}{\texttt{tensorboard --logdir runs/}}
+
+You should start with the case $K=1 , N=2$ as it can aid you in the implementation and debugging process. Your model should be able to achieve a query set accuracy of above 90\% in this first two scenarios scenario on held-out test tasks, around 80\% in the second scenario, and around 70\% in the final scenario.
+%You should be able to achieve accuracies about 90\%, 75-80\%, 70\%, and 80\% for each of the above cases.
+
+
+For each configuration, submit a plot of the meta-test query set classification accuracy over training iterations (A TensorBoard screenshot is fine). Answer the following questions:
+
+\textcolor{red}{Your plot goes here.}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[scale=1.5]{figures/report/k1_n2}
+    \caption{K1 N2}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[scale=1.5]{figures/report/k2_n2}
+    \caption{K2 N2}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[scale=1.5]{figures/report/k1_n3}
+    \caption{K1 N3}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[scale=1.5]{figures/report/k1_n4}
+    \caption{K1 N4}
+\end{figure}
+
+\begin{enumerate}
+    \item How does increasing the number of classes affect learning and performance?
+    
+    \textcolor{red}{Your answer goes here.}
+
+    Figure 3,5 and 6 shows that increasing the number of classes while keeping the number of examples degrades performance.
+
+    \item How does increasing the number of examples in the support set affect performance?
+    
+   \textcolor{red}{Your answer goes here.}
+
+    Figure 1 and 2 shows that increasing the number of examples improves performance.
+    However the difference is not as significant as changing the number of classes.
+
+\end{enumerate}
+
+\section*{Problem 4: Experimentation}
+\begin{enumerate}[label=\alph*]
+    \item Experiment with one hyperparameter that affects the performance of the model, such as the type of recurrent layer, size of hidden state, learning rate, or number of layers.  Submit a plot that shows how the meta-test query set classification accuracy of the model changes on 1-shot, 3-way classification as you change the parameter. Provide a brief rationale for why you chose the parameter and what you observed in the caption for the plot.
+    
+    \textcolor{red}{Your plot and answer goes here.}
+
+    \begin{figure}[h]
+        \centering
+        \includegraphics[scale=1.5]{figures/report/k1_n3_h64}
+        \caption{K1 N3 H 64}
+    \end{figure}
+
+    \begin{figure}[h]
+        \centering
+        \includegraphics[scale=1.5]{figures/report/k1_n3_h192}
+        \caption{K1 N3 H 192}
+    \end{figure}
+
+    \break\newline
+    Increasing learning rate may in-stabilize training with some speed-up.Training already levels off after some amount, increasing learning rate is not expected to improve anymore.
+    Decreasing the learning rate is expected to slow down the training which is already quiet stable.
+    Increasing layer count may require more data. They are not promising.
+
+    \break
+    \newline
+    Hidden state size is tweaked to see its impact on performance. Hidden state size determines amount of information passed between states. Decreasing it may save some resources at the expense of some degredation over performance.
+    Increasing state size claims more resources and it may increase performance.
+
+    \break\newline
+    Figure 7 shows that decreasing the hidden state size to half causes some amount of deterioration in performance which can be accepted.
+    Figure 8 shows that increasing the hidden state size by half the amount brings almost no benefit.
+
+    \break \newline
+
+    \item \textbf{Extra Credit:} In this question we'll explore the effect of memory representation on model performance. We will focus on the $K=1$, $N=3$ case.
+    
+    In the previous experiments we used an LSTM model with 128 units. Consider additional memory sizes of 256, and 8. How does increasing and decreasing the memory capacity influence performance?
+    
+    \textcolor{red}{Your plot and answer goes here.}
+    
+\end{enumerate}
+
+%\begin{figure}
+%    \centering
+%    \includegraphics[width = %0.875\textwidth]{figures/meta_memory.png}
+%    \caption{Memory-augmented neural network for meta-learning. Figure from %\cite{pmlr-v48-santoro16}.}
+%    \label{fig:dnc}
+%\end{figure}
+
+\newpage
+\bibliography{references}
+\bibliographystyle{unsrt}
+
+\end{document}
