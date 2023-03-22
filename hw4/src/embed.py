@@ -242,7 +242,7 @@ class EncoderDecoder(Embedder, relabel.RewardLabeler):
         # anything about this.
         # ********************************************************
         # ******************* YOUR CODE HERE *********************
-        decoder_context_loss = (all_decoder_contexts - id_contexts.unsqueeze(1).expand_as(all_decoder_contexts)).pow(2).mean(dim=2)
+        decoder_context_loss = (all_decoder_contexts - id_contexts.unsqueeze(1).expand_as(all_decoder_contexts).detach()).pow(2).sum(-1)
 
         batch_size, episode_length_1 = mask.shape
         assert decoder_context_loss.shape == (batch_size, episode_length_1)
@@ -254,32 +254,6 @@ class EncoderDecoder(Embedder, relabel.RewardLabeler):
             "decoder_loss": decoder_context_loss,
             "information_bottleneck": torch.max(
                 (id_contexts ** 2).sum(-1), cutoff).mean()
-        }
-        return losses
-
-    def _compute_losses_2(
-            self, trajectories, id_contexts, all_transition_contexts,
-            transition_contexts, mask):
-        """Computes losses based on the return values of _compute_contexts.
-
-        Args:
-          See return values of _compute_contexts.
-
-        Returns:
-          losses (dict(str: torch.FloatTensor)): see forward().
-        """
-        del trajectories
-
-        transition_context_loss = (
-                (all_transition_contexts - id_contexts.unsqueeze(1).expand_as(
-                    all_transition_contexts).detach()) ** 2).sum(-1)
-        transition_context_loss = (
-                                          transition_context_loss * mask).sum() / mask.sum()
-
-        cutoff = torch.ones(id_contexts.shape[0]) * 10
-        losses = {
-            "transition_context_loss": transition_context_loss,
-            "id_context_loss": torch.max((id_contexts ** 2).sum(-1), cutoff).mean()
         }
         return losses
 
@@ -354,7 +328,7 @@ class EncoderDecoder(Embedder, relabel.RewardLabeler):
         # See Equation (5) of the DREAM paper if you're curious.
         # ********************************************************
         # ******************* YOUR CODE HERE *********************
-        log_q_omega = -(all_decoder_contexts - id_contexts.unsqueeze(1).expand_as(all_decoder_contexts)).pow(2).mean(dim=2)
+        log_q_omega = -(all_decoder_contexts - id_contexts.unsqueeze(1).expand_as(all_decoder_contexts).detach()).pow(2).sum(-1)
         rewards = log_q_omega[:, 1:] - log_q_omega[:, :-1]
         distances = - log_q_omega
 
@@ -364,29 +338,6 @@ class EncoderDecoder(Embedder, relabel.RewardLabeler):
         assert distances.shape == (batch_size, episode_length_1)
         # ********************************************************
         return ((rewards - self._penalty) * mask[:, 1:]).detach(), distances
-
-    def label_rewards_2(self, trajectories):
-        """Computes rewards for each experience in the trajectory.
-
-        Args:
-          trajectories (list[list[Experience]]): batch of trajectories.
-
-        Returns:
-          rewards (torch.FloatTensor): of shape (batch_size, max_seq_len) where
-            rewards[i][j] is the rewards for the experience trajectories[i][j].
-            This is padded with zeros and is detached from the graph.
-          distances (torch.FloatTensor): of shape (batch_size, max_seq_len + 1)
-            equal to ||f(e) - g(\tau^e_{:t})|| for each t.
-        """
-        id_contexts, all_transition_contexts, _, mask = self._compute_contexts(
-            trajectories)
-
-        distances = (
-                (all_transition_contexts - id_contexts.unsqueeze(1).expand_as(
-                    all_transition_contexts).detach()) ** 2).sum(-1)
-        # Add penalty
-        rewards = distances[:, :-1] - distances[:, 1:] - self._penalty
-        return (rewards * mask[:, 1:]).detach(), distances
 
 class ExploitationPolicyEmbedder(Embedder):
     """Embeds (s, i, \tau^e) where:
