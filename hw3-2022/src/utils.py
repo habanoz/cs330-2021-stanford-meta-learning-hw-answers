@@ -69,7 +69,6 @@ def get_dataset(dataset: str, n_train: int, n_val: int = 100):
     elif dataset == 'babi':
         n_train = 256
         d = datasets.load_dataset('babi_qa', 'en-valid-10k-qa1', split='train')
-        # d = datasets.load_dataset('text', data_files='babi-en-valid-10k-archive/tasks_1-20_v1-2/en-valid-10k/qa1_train.txt', split="train")
         answer_idxs = []
         for story in d['story']:
             for idx, answer in enumerate(story['answer']):
@@ -77,6 +76,25 @@ def get_dataset(dataset: str, n_train: int, n_val: int = 100):
                     answer_idxs.append(idx)
                     break
         
+        perm = np.random.permutation(len(d['story']))
+        answers = [story['answer'][idx] for idx, story in zip(answer_idxs, d['story'])]
+        stories = [' '.join(story['text'][:idx + 1]) for idx, story in zip(answer_idxs, d['story'])]
+
+        answers = [answers[idx] for idx in perm]
+        stories = [stories[idx] for idx in perm]
+        data = {'x': stories, 'y': answers, 'simple_y': answers}
+        d = datasets.Dataset.from_dict(data)
+        return d[:n_train], d[n_train:n_train + n_val]
+    elif dataset == 'habanoz/babi_qa_en_valid_10k_qa1':
+        n_train = 256
+        d = datasets.load_dataset(dataset, split='train')
+        answer_idxs = []
+        for story in d['story']:
+            for idx, answer in enumerate(story['answer']):
+                if answer:
+                    answer_idxs.append(idx)
+                    break
+
         perm = np.random.permutation(len(d['story']))
         answers = [story['answer'][idx] for idx, story in zip(answer_idxs, d['story'])]
         stories = [' '.join(story['text'][:idx + 1]) for idx, story in zip(answer_idxs, d['story'])]
@@ -134,6 +152,7 @@ def max_sampled_tokens_for_dataset(dataset: str) -> int:
         'cnn': 30,
         'trivia': 12,
         'babi': 6,
+        'habanoz/babi_qa_en_valid_10k_qa1': 6,
         'xsum': 30,
     }[dataset]
 
@@ -144,7 +163,7 @@ def get_model_and_tokenizer(model: str, Cls, **model_kwargs):
     m = Cls.from_pretrained(hf_model_name, **model_kwargs)
     if isinstance(m, transformers.GPT2LMHeadModel):
         m.transformer.gradient_checkpointing_enable()
-
+    m.generate()
     tok = transformers.AutoTokenizer.from_pretrained(hf_model_name)
 
     if tok.pad_token_id is None:
@@ -163,6 +182,7 @@ def metric_for_dataset(dataset: str):
         'xsum': 'rouge',
         'trivia': 'exact match',
         'babi': 'exact match',
+        'habanoz/babi_qa_en_valid_10k_qa1': 'exact match',
         'amazon': 'classification accuracy',
     }[dataset]
 
@@ -172,6 +192,7 @@ def early_stop_thresold(dataset: str):
         'cnn': 0.8,
         'trivia': 0.7,
         'babi': 0.9,
+        'habanoz/babi_qa_en_valid_10k_qa1':  0.9,
         'amazon': 0.75,
         'xsum': 0.55,
     }[dataset]

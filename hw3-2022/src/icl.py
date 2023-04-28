@@ -28,15 +28,14 @@ parser.add_argument('--repeats', default=1, type=int)
 parser.add_argument('--device', default='cpu')
 args = parser.parse_args()
 
-
 DEVICE = torch.device(args.device)
 
 
 def get_icl_prompts(
-    support_inputs: List[str],
-    support_labels: List[str],
-    test_input: str,
-    prompt_mode: str = 'qa') -> str:
+        support_inputs: List[str],
+        support_labels: List[str],
+        test_input: str,
+        prompt_mode: str = 'qa') -> str:
     """
     Take a list of contexts and combine them into k-shot prompts.
 
@@ -56,7 +55,24 @@ def get_icl_prompts(
       A string containing the complete input to the model.
     """
     # YOUR CODE HERE
-    prompt = ''
+    perm = np.random.permutation(len(support_inputs))
+    support_inputs = [support_inputs[idx] for idx in perm]
+    support_labels = [support_labels[idx] for idx in perm]
+
+    if prompt_mode == 'qa':
+        prompt = "".join([f"{q} In the {a}. " for q, a in zip(support_inputs, support_labels)])
+        prompt += test_input + " In the"
+    elif prompt_mode == 'none':
+        prompt = "".join([f" {q} ; {a} " for q, a in zip(support_inputs, support_labels)])
+        prompt += test_input
+    elif prompt_mode == 'tldr':
+        prompt = "".join([f"{q} TL;DR: {a} " for q, a in zip(support_inputs, support_labels)])
+        prompt += test_input + " TL;DR:"
+    elif prompt_mode == 'custom':
+        prompt = "".join([f"{q} not implemented {a} " for q, a in zip(support_inputs, support_labels)])
+        prompt += test_input + " not implemented "
+    else:
+        raise Exception(f"Unknown prompt mode: {prompt_mode}")
     return prompt
 
 
@@ -80,6 +96,7 @@ def get_performance_metric(predictions: List[str], targets: List[str], metric: s
                 return prediction.strip('. ').lower()
 
             normalized = [_normalize(p) for p in predictions]
+
             def contains(key, candidates):
                 for c in candidates:
                     if key in c:
@@ -113,8 +130,21 @@ def do_sample(model, input_ids, stop_tokens, max_tokens):
     """
     # YOUR CODE HERE
     sampled_tokens = []
-    return sampled_tokens
+    input_ids = input_ids.input_ids
+    for i in range(max_tokens):
+        with torch.inference_mode():
+            outputs = model(input_ids=input_ids)
 
+        logits = outputs.logits[:, -1, :]
+        predicted_id = logits.argmax(-1)
+
+        if predicted_id.item() in stop_tokens:
+            break
+
+        sampled_tokens.append(predicted_id.item())
+        input_ids = torch.cat([input_ids, predicted_id[:, None]], dim=-1)
+
+    return sampled_tokens
 
 def run_icl(models: List[str], datasets_: List[str], ks: List[int], prompt_modes: List[str], n_val: int = 125):
     results = {}
@@ -132,7 +162,8 @@ def run_icl(models: List[str], datasets_: List[str], ks: List[int], prompt_modes
             train, val = utils.get_dataset(dataset, n_train=max(ks), n_val=n_val)
             for prompt_mode in prompt_modes:
                 for k in ks:
-                    print(f'Running in-context learning with {model_name} on {dataset} with k={k} and prompt_mode={prompt_mode}')
+                    print(
+                        f'Running in-context learning with {model_name} on {dataset} with k={k} and prompt_mode={prompt_mode}')
                     for repeat in range(args.repeats):
                         if repeat > 0:
                             print(f'Beginning repeat #{repeat}')
@@ -155,15 +186,16 @@ def run_icl(models: List[str], datasets_: List[str], ks: List[int], prompt_modes
                             # Note that the tokenizer by default will give you results on the CPU, so you will need to move them to the
                             # proper device.
                             # YOUR CODE HERE
-
-                            decoded_prediction = ''
-
+                            prompts = get_icl_prompts(support_x, support_y, test_input, prompt_mode)
+                            input_ids = tokenizer(prompts, return_tensors='pt')
+                            samples = do_sample(model, input_ids, stop_tokens, max_tokens)
+                            decoded_prediction = tokenizer.decode(samples)
                             # END YOUR CODE
 
                             predictions.append(decoded_prediction)
                             metric = get_performance_metric(predictions, targets, utils.metric_for_dataset(dataset))
                             pbar.set_description(f'Eval: {metric:.04f}')
-                        results['_'.join([model_name, dataset, str(k), prompt_mode])] = metric
+                        results['_'.join([model_name, dataset.replace("/","_"), str(k), prompt_mode])] = metric
 
                         print('Evaluation results:', results)
                         if not os.path.exists('results/icl'):
@@ -184,7 +216,7 @@ def plot(models, dataset, ks, prompt_modes):
         symbol = symbols.pop(0)
         for prompt_mode in prompt_modes:
             for k in ks:
-                fn = '_'.join([model, dataset, str(k), prompt_mode])
+                fn = '_'.join([model, dataset.replace("/","_"), str(k), prompt_mode])
                 id_ = '_'.join([model, dataset, prompt_mode])
                 with open(f'results/icl/{fn}.json', 'r') as f:
                     score = json.load(f)['metric']
@@ -198,7 +230,7 @@ def plot(models, dataset, ks, prompt_modes):
 
     if max(x_vals) > 4:
         plt.xscale('symlog')
-    
+
     ax = plt.gca()
     ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
     ax.xaxis.set_ticks(v['x'])

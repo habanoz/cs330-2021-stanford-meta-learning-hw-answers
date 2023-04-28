@@ -207,6 +207,10 @@ Finally, these two approaches can be combined, for example adding the \texttt{Q:
         
     \textbf{\color{red}Include your plot and answer here.}
 
+    Answer: According to chart below, zero-shot performance matters significantly with scale. However, few-shot performance does not vary much with scale.
+
+    \includegraphics{images/q1}
+
     \item (5 pt) Now let's evaluate several different prompt formats on the XSum dataset. With and without a task description in the prompt, evaluate zero-shot and few-shot performance for XSum on GPT-2-Medium with the command:
 
     \texttt{\small python3 icl.py --task icl --model med,full --dataset xsum --k 0,1,4 \textbackslash \\
@@ -224,6 +228,10 @@ Finally, these two approaches can be combined, for example adding the \texttt{Q:
     How does the performance of the \texttt{TL;DR:} prompt compare with no prompt formatting? What was your custom prompt format, and how did it compare with \texttt{TL;DR:}? Discuss the relative performance of the different prompts in the zero-shot, one-shot, and few-shot settings.
     
     \textbf{\color{red}Include your plot and answer here.}
+
+    Answer: TLDR performs better than none which is expected. Custom prompt is not used.
+
+    \includegraphics{images/q2}
 
 \end{enumerate}
 
