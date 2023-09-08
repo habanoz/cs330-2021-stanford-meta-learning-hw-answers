@@ -27,7 +27,6 @@ parser.add_argument('--repeats', default=1, type=int)
 parser.add_argument('--device', default='cpu')
 args = parser.parse_args()
 
-
 DEVICE = torch.device(args.device)
 
 
@@ -46,6 +45,15 @@ class LoRAConv1DWrapper(nn.Module):
         ###     if you initialize both A and B to zero? What about if just one is zero?
         ###
         # YOUR CODE HERE
+        self.base_module.weight.requires_grad = False
+
+        d1, d2 = conv1dmodule.weight.shape
+
+        self.A = nn.Linear(d1, lora_rank, bias=False, device=DEVICE)
+        nn.init.kaiming_uniform_(self.A.weight)
+
+        self.B = nn.Linear(lora_rank, d2, bias=False, device=DEVICE)
+        nn.init.zeros_(self.B.weight)
 
     def forward(self, x):
         ###
@@ -54,7 +62,9 @@ class LoRAConv1DWrapper(nn.Module):
         ### Hint: matrix multiplication is associative.
         ###
         # YOUR CODE HERE
-        pass
+        with torch.no_grad():
+            base = self.base_module(x)
+        return base + self.B(self.A(x))
 
 
 def parameters_to_fine_tune(model: nn.Module, mode: str) -> List:
@@ -72,15 +82,17 @@ def parameters_to_fine_tune(model: nn.Module, mode: str) -> List:
     """
     # YOUR CODE HERE
     if mode == 'all':
-        return model.parameters()
+        return list(model.parameters())
     elif mode == 'last':
-        pass
+        return list(model.transformer.h[-2:].parameters())
     elif mode == 'first':
-        pass
+        return list(model.transformer.h[:2].parameters())
     elif mode == 'middle':
-        pass
+        middle = len(model.transformer.h) // 2
+        return list(model.transformer.h[middle:middle + 2].parameters())
     elif mode.startswith('lora'):
-        pass
+        return [param for module in model.modules() if isinstance(module, LoRAConv1DWrapper) for param in
+                [module.A.weight, module.B.weight]]
     else:
         raise NotImplementedError()
 
@@ -112,12 +124,22 @@ def get_loss(logits: torch.tensor, targets: torch.tensor) -> torch.tensor:
     if logits.dim() == 2:
         return torch.nn.functional.cross_entropy(logits, target=targets)
     elif logits.dim() == 3:
-        pass
+        batch_size, seq_length, vocab_size = logits.shape
+        assert batch_size == targets.shape[0]
+        assert seq_length == targets.shape[1]
+
+        targets = targets.roll(-1, dims=1)
+
+        flat_logits = logits.view((1, -1, logits.shape[-1])).squeeze()
+        flat_targets = targets.view((1, -1)).squeeze()
+
+        return nn.functional.cross_entropy(flat_logits, flat_targets, ignore_index=-100)
     else:
-        raise ValueError(f'Logits should either be 2-dim (for classification) or 3-dim (for generation); got {logits.dim()}')
+        raise ValueError(
+            f'Logits should either be 2-dim (for classification) or 3-dim (for generation); got {logits.dim()}')
 
 
-def get_acc(logits, targets):
+def get_acc(logits, targets, tok):
     """
     Computes the exact match accuracy for either sequence classification or generation. i.e.,
       the fraction of predictions for which the most likely class/token equals the target.
@@ -142,11 +164,19 @@ def get_acc(logits, targets):
     """
     # YOUR CODE HERE
     if logits.dim() == 2:
-        return ((logits.argmax(dim=-1)==targets).sum()/len(targets)).item()
+        return ((logits.argmax(dim=-1) == targets).sum() / len(targets)).item()
     elif logits.dim() == 3:
-        pass
+        batch_size, seq_length, vocab_size = logits.shape
+        assert batch_size == targets.shape[0]
+        assert seq_length == targets.shape[1]
+
+        targets = targets.roll(-1, dims=1)
+        idx = targets != -100
+
+        return (logits[idx].argmax(dim=-1) == targets[idx]).to(torch.float).mean()
     else:
-        raise ValueError(f'Logits should either be 2-dim (for classification) or 3-dim (for generation); got {logits.dim()}')
+        raise ValueError(
+            f'Logits should either be 2-dim (for classification) or 3-dim (for generation); got {logits.dim()}')
 
 
 def ft_bert(model, tok, x, y, mode, batch_size=8):
@@ -237,7 +267,13 @@ def tokenize_gpt2_batch(tokenizer, x, y):
             returned by the tokenizer without creating a new dictionary.
     """
     # YOUR CODE HERE
-    tokenized_sequences = None
+    tokenized_sequences = tokenizer([x_ + y_ for x_, y_ in zip(x, y)], return_tensors='pt', padding=True)
+    input_ids = tokenized_sequences['input_ids']
+
+    tokenized_sequences['labels'] = torch.full_like(input_ids, fill_value=-100)
+    for i, y_ids in enumerate(tokenizer(y)['input_ids']):
+        tokenized_sequences['labels'][i, -len(y_ids):] = torch.tensor(y_ids)
+
     return tokenized_sequences
 
 
@@ -293,7 +329,20 @@ def ft_gpt2(model, tok, x, y, mode, dataset, batch_size=8, grad_accum=8):
         # Note: the ** operator will unpack a dictionary into keyword arguments to a function (such as your model)
 
         # YOUR CODE HERE
+        x_selected = [x[batch_idx] for batch_idx in batch_idxs]
+        y_selected = [y[batch_idx] for batch_idx in batch_idxs]
+        tokenized_batch = tokenize_gpt2_batch(tok, x_selected, y_selected)
+        model_output = model(**tokenized_batch, use_cache=False)
 
+        loss = get_loss(model_output.logits, tokenized_batch['labels'])
+        assert abs(loss-model_output.loss)<0.00001
+
+        loss = loss / grad_accum
+
+        loss.backward()
+        if (step+1) % grad_accum == 0:
+            optimizer.step()
+            optimizer.zero_grad()
         # END YOUR CODE
 
         if step % (grad_accum * 5) == 0:
@@ -301,8 +350,8 @@ def ft_gpt2(model, tok, x, y, mode, dataset, batch_size=8, grad_accum=8):
                 model.eval()
                 accs = []
                 for idx in range(len(list(all_both.values())[0])):
-                    d = {k: v[idx:idx+1] for k, v in all_both.items()}
-                    acc = get_acc(model(**d).logits, d['labels'])
+                    d = {k: v[idx:idx + 1] for k, v in all_both.items()}
+                    acc = get_acc(model(**d).logits, d['labels'], tok)
                     accs.append(acc)
                 total_acc = sum(accs) / len(accs)
                 pbar.set_description(f'Fine-tuning acc: {total_acc:.04f}')
@@ -325,11 +374,13 @@ def run_ft(models: List[str], datasets: List[str], ks: List[int], modes: List[st
     results = {}
     for dataset in datasets:
         if args.debug:
-            n_val = 1   
+            n_val = 1
         train, val = utils.get_dataset(dataset, max(ks), n_val=n_val)
         for model_name, mode in itertools.product(models, modes):
             if dataset == 'amazon':
-                model, tokenizer = utils.get_model_and_tokenizer(model_name, transformers.AutoModelForSequenceClassification, num_labels=5)
+                model, tokenizer = utils.get_model_and_tokenizer(model_name,
+                                                                 transformers.AutoModelForSequenceClassification,
+                                                                 num_labels=5)
             else:
                 model, tokenizer = utils.get_model_and_tokenizer(model_name, transformers.AutoModelForCausalLM)
             stop_tokens = utils.stop_tokens(tokenizer)
@@ -340,7 +391,7 @@ def run_ft(models: List[str], datasets: List[str], ks: List[int], modes: List[st
                     if repeat > 0:
                         print(f'Beginning repeat #{repeat}')
                     if dataset == 'amazon':
-                        fine_tuned = ft_bert(model, tokenizer, train['x'][:k*5], train['y'][:k*5], mode)
+                        fine_tuned = ft_bert(model, tokenizer, train['x'][:k * 5], train['y'][:k * 5], mode)
                         val_acc = eval(fine_tuned, tokenizer, val)
                         results['_'.join([model_name, dataset, str(k), mode])] = val_acc
                     else:
@@ -409,6 +460,7 @@ def plot(models, datasets, ks, modes):
     plt.ylabel('/'.join([utils.metric_for_dataset(dataset) for dataset in datasets]))
     plt.xlabel('Number of support examples')
     plt.show()
+
 
 def run():
     ks = [int(k) for k in args.k.split(',')]

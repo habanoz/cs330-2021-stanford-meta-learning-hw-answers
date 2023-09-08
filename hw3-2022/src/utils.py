@@ -163,8 +163,13 @@ def get_model_and_tokenizer(model: str, Cls, **model_kwargs):
     m = Cls.from_pretrained(hf_model_name, **model_kwargs)
     if isinstance(m, transformers.GPT2LMHeadModel):
         m.transformer.gradient_checkpointing_enable()
-    m.generate()
     tok = transformers.AutoTokenizer.from_pretrained(hf_model_name)
+
+    if m.config.pad_token_id is None:
+        m.config.pad_token_id = m.config.eos_token_id
+    m.generate(max_new_tokens=100)
+
+    tok.pad_token = tok.eos_token
 
     if tok.pad_token_id is None:
         if Cls == transformers.AutoModelForCausalLM:
