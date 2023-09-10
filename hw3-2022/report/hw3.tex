@@ -275,7 +275,22 @@ As we observed in question 1, fine-tuning the entire model can become extremely 
     \phantom{asdf}--dataset babi --k 0,1,8,128}}
     
     \textbf{\color{red}Include your plots and describe the results here.}
+    \begin{figure}
+        \centering
+        \includegraphics{images/q2_1}
+        \caption{xsum}
+        \label{fig:xsum}
+    \end{figure}
 
+    \begin{figure}
+        \centering
+        \includegraphics{images/q2_2}
+        \caption{babi}
+        \label{fig:babi}
+    \end{figure}
+
+    According to Figure\ref{fig:xsum} and Figure\ref{fig:babi}, regular fine-tuning performs better than lora.
+    Another interesting observation is, training middle layers performs better than training first and last layers.
 \end{enumerate}
 
 \section*{(10 pt) Question 3: Comparing in-context learning and fine-tuning}
@@ -289,6 +304,15 @@ As we observed in question 1, fine-tuning the entire model can become extremely 
     
     \textbf{\color{red}Include your plot and write your answer here.}
 
+    \begin{figure}
+        \centering
+        \includegraphics{/home/melek/PycharmProjects/cs330-2021-stanford-meta-learning-hw-answers/hw3-2022/report/images/q3}
+        \caption{LoRA-16 and in-context learning for XSum}
+        \label{fig:q3}
+    \end{figure}
+
+    According to figure\ref{fig:q3} icl is good choice when number of support example is low. ICL cannot use large number of support examples due to context size limit.
+
     \item (5 pt) One potential disadvantage of in-context learning is that we must choose an ordering for the examples in our prompt, and \textit{that ordering can sometimes impact performance negatively}. Run the command:
 
     {\small \texttt{python3 icl.py --task icl --model med --dataset babi --k 16 --repeats 5}}
@@ -296,6 +320,9 @@ As we observed in question 1, fine-tuning the entire model can become extremely 
     to compute the evaluation performance of in-context few-shot performance for 5 random orderings of the prompt. Report the number you get; the standard deviation of performance for fine-tuning is approximately 0.013. Does in-context learning or fine-tuning have a higher standard deviation?
     
     \textbf{\color{red}Write your answer here.}
+
+    Evaluation results are [0.608, 0.632, 0.616, 0.64, 0.632 ] which has a std of 0.011. The difference is not significant.
+    ICL is prone to ordering but this is not visible in this example.
 
     \textbf{(5 pt) Extra credit:} See \href{https://arxiv.org/pdf/2104.08786.pdf}{this paper} for multiple heuristics for picking a prompt ordering. Implement either the globalE or localE heuristic, and report the accuracy you find for that ordering for 16-shot bAbI on GPT-2-medium. Compare it with the accuracy you found with random prompt orderings in question 1.
     
