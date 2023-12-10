@@ -271,10 +271,10 @@ def tokenize_gpt2_batch(tokenizer, x, y):
     input_ids = tokenized_sequences['input_ids']
 
     tokenized_sequences['labels'] = torch.full_like(input_ids, fill_value=-100)
-    for i, y_ids in enumerate(tokenizer(y)['input_ids']):
-        tokenized_sequences['labels'][i, -len(y_ids):] = torch.tensor(y_ids)
+    for i, (x_ids, y_ids) in enumerate(zip(tokenizer(x)['input_ids'], tokenizer(y)['input_ids'])):
+        tokenized_sequences['labels'][i, len(x_ids):len(x_ids)+len(y_ids)] = torch.tensor(y_ids)
 
-    return tokenized_sequences
+    return tokenized_sequences.to(DEVICE)
 
 
 def add_prefixes(x: List[str], y: List[str], dataset: str) -> Tuple[List[str], List[str]]:

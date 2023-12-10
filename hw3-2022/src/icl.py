@@ -130,7 +130,7 @@ def do_sample(model, input_ids, stop_tokens, max_tokens):
     """
     # YOUR CODE HERE
     sampled_tokens = []
-    input_ids = input_ids.input_ids
+    input_ids = input_ids.input_ids if hasattr(input_ids,"input_ids") else input_ids
     for i in range(max_tokens):
         with torch.inference_mode():
             outputs = model(input_ids=input_ids)
